@@ -243,6 +243,7 @@ def train_eval_model(c, X_train, y_train, X_test, y_test, CLF):
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
     plt.title(f'Confusion Matrix using {model_name}')
+    plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
     plt.show()
 
 
@@ -354,13 +355,14 @@ def main():
 
     # feature engineering for max heart rate.
     # heart rate may not have linear relationship, compute quadratic and cubed terms for it
-    # print('feature engineering quadratic and cubed term for max heart rate')
-    # X_train_selected['MaxHR_squared'] = X_train_selected['MaxHR'].apply(lambda x: x ** 2)
-    # X_test_selected['MaxHR_squared'] = X_test_selected['MaxHR'].apply(lambda x: x ** 2)
-    # X_train_selected['MaxHR_cubed'] = X_train_selected['MaxHR'].apply(lambda x: x ** 3)
-    # X_test_selected['MaxHR_cubed'] = X_test_selected['MaxHR'].apply(lambda x: x ** 3)
-    #
-    # train_ANN(X_train_selected, y_train, X_test_selected, y_test, 10)
+    print('feature engineering quadratic and cubed term for ST_Slope')
+    X_train_selected['Cholesterol_squared'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 2)
+    X_test_selected['Cholesterol_squared'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 2)
+    X_train_selected['Cholesterol_cubic'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 3)
+    X_test_selected['Cholesterol_cubic'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 3)
+
+    # evaluate the logistic regression again using engineered features.
+    train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
 
 
 if __name__ == '__main__':
