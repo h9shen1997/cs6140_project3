@@ -19,6 +19,8 @@ from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
 
 # set the display of DataFrame to display full rows and columns.
 pd.set_option('display.max_rows', None)
@@ -262,18 +264,23 @@ def train_neural_network(X_train, y_train, X_test, y_test, dim):
     print(f'ANN Accuracy: {acc * 100}%')
 
 
-def plot_roc(y_test, y_score):
+def plot_roc(y_test, y_score, model_name):
     fpr, tpr, thresholds = roc_curve(y_test, y_score)
     roc_auc = auc(fpr, tpr)
     plt.figure()
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, label='Using a random classifier', linestyle='--')
+    # find the operating point at which fpr is 0.1
+    idx = (np.abs(fpr - 0.05)).argmin()
+    plt.plot(fpr[idx], tpr[idx], 'x', label='FPR = 0.05', color='r')
+    print(f'The true positive rate at fpr=0.05 is: {tpr[idx]:.2f}')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
+    plt.title(f'Receiver Operating Characteristic Curve using {model_name}')
     plt.legend(loc="lower right")
+    plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
     plt.show()
 
 
@@ -283,6 +290,7 @@ def main():
     # import training and test data into DataFrame
     train_df = read_csv('data/heart_train_718.csv')
     test_df = read_csv('data/heart_test_200.csv')
+    print(train_df.shape, test_df.shape)
 
     # Task 1: Pre-processing, Data Mining, and Visualization
     # combine the training and test set to prepare for data normalization
@@ -345,17 +353,16 @@ def main():
     # observe natural clustering within the training data by projecting it to 2-D
     observe_clustering(X_train)
 
-    CLF = {}
-    CLF['Logistic Regression'] = LogisticRegression(max_iter=1000, C=1.6, random_state=0)
-    CLF['SGDCClassifier L2'] = SGDClassifier(max_iter=1000, alpha=1e-5, penalty='l2', random_state=0)
-    CLF['SGDCClassifier L1'] = SGDClassifier(max_iter=1000, alpha=1e-5, penalty='l1', random_state=0)
-    CLF['Ridge Classifier'] = RidgeClassifier(max_iter=1000, tol=1e-2, solver='sag', random_state=0)
-    CLF['Perceptron'] = Perceptron(max_iter=1000, random_state=0)
-    CLF['BernoulliNB'] = BernoulliNB(alpha=.01)
-    CLF['K-Nearest Neighbor'] = KNeighborsClassifier(n_neighbors=5, weights='distance', p=2)
-    CLF['Support Vector Machine'] = SVC(max_iter=1000, C=1.0, tol=1e-3, kernel='rbf', gamma='scale', random_state=0)
-    CLF['Decision Tree Classifier'] = DecisionTreeClassifier(random_state=0)
-    CLF['Random Forest Classifier'] = RandomForestClassifier(random_state=0)
+    CLF = {'Logistic Regression': LogisticRegression(C=1.6, random_state=0),
+           'SGDCClassifier L2': SGDClassifier(alpha=1e-5, penalty='l2', random_state=0),
+           'SGDCClassifier L1': SGDClassifier(alpha=1e-5, penalty='l1', random_state=0),
+           'Ridge Classifier': RidgeClassifier(tol=1e-2, solver='sag', random_state=0),
+           'Perceptron': Perceptron(random_state=0), 'BernoulliNB': BernoulliNB(alpha=.01),
+           'K-Nearest Neighbor': KNeighborsClassifier(n_neighbors=5, weights='distance', p=2),
+           'Support Vector Machine': SVC(C=1.0, tol=1e-3, kernel='rbf', gamma='scale', random_state=0),
+           'Decision Tree Classifier': DecisionTreeClassifier(random_state=0),
+           'Random Forest Classifier': RandomForestClassifier(random_state=0)}
+
     print('\nAvailable classifiers:')
     for c in CLF:
         print('- ', c)
@@ -384,11 +391,85 @@ def main():
     train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
 
     # plot ROC curve for 4 models
-    selected_models = ['Support Vector Machine', 'Random Forest Classifier', 'K-Nearest Neighbor', 'Logistic Regression']
+    selected_models = ['Support Vector Machine', 'Random Forest Classifier', 'K-Nearest Neighbor',
+                       'Logistic Regression']
+    print(f'\nThe selected models for ROC curve are {selected_models}')
     for c in CLF:
         if c in selected_models:
             _, _, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, CLF[c])
-            plot_roc(y_test, y_score)
+            plot_roc(y_test, y_score, c)
+
+    # drop the engineered features as they do not improve the test accuracy.
+    X_train_selected = X_train_selected.drop('Cholesterol_squared', axis=1)
+    X_train_selected = X_train_selected.drop('Cholesterol_cubic', axis=1)
+    X_test_selected = X_test_selected.drop('Cholesterol_squared', axis=1)
+    X_test_selected = X_test_selected.drop('Cholesterol_cubic', axis=1)
+
+    # after ROC, decide to use RandomForestClassifier and K-Nearest Neighbor models for 3 iterations
+    # RandomForestClassifier
+    print(f'\nUse GridSearchCV to obtain the best hyper-parameter for RandomForestClassifier.')
+    rfc_param_grid = {
+        'n_estimators': [50, 100, 200],
+        'criterion': ['gini', 'entropy', 'log_loss'],
+        'max_depth': [None, 5, 10, 20],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'max_features': ['sqrt', 'log2', None]
+    }
+    # rfc = RandomForestClassifier()
+    # grid_search = GridSearchCV(estimator=rfc, param_grid=rfc_param_grid, cv=5)
+    # grid_search.fit(X_train_selected, y_train)
+    # # print the best hyperparameter and the corresponding score
+    # print("Best hyperparameter: ", grid_search.best_params_)
+    # print("Best score: ", grid_search.best_score_)
+
+    # Best hyperparameter:  {'criterion': 'log_loss', 'max_depth': None, 'max_features': 'log2', 'min_samples_leaf':
+    # 1, 'min_samples_split': 10, 'n_estimators': 100}
+    # Best score:  0.8566336441336443 use these hyperparameter to
+    # Use these hyperparameter to predict the test results
+    rfc = RandomForestClassifier(criterion='log_loss', max_depth=None, max_features='log2', min_samples_leaf=1,
+                                 min_samples_split=10, n_estimators=100, random_state=0)
+    rfc.fit(X_train_selected, y_train)
+    acc = rfc.score(X_test_selected, y_test)
+    print(f'The best test accuracy using RandomForestClassifier is: {acc}')
+
+    # K-Nearest Neighbor Classifier
+    print(f'\nUse GridSearchCV to obtain the best hyper-parameter for K-Nearest Neighbor Classifier.')
+    knn_param_grid = {
+        'n_neighbors': [3, 5, 7, 9],
+        'algorithm': ['ball_tree', 'auto', 'kd_tree'],
+        'weights': ['uniform', 'distance'],
+        'metric': ['euclidean', 'manhattan'],
+    }
+    # knn = KNeighborsClassifier()
+    # grid_search = GridSearchCV(estimator=knn, param_grid=knn_param_grid, cv=5)
+    # grid_search.fit(X_train_selected, y_train)
+    # # print the best hyperparameter and the corresponding score
+    # print("Best hyperparameter: ", grid_search.best_params_)
+    # print("Best score: ", grid_search.best_score_)
+
+    # Best hyperparameter:  {'algorithm': 'ball_tree', 'metric': 'euclidean', 'n_neighbors': 9, 'weights': 'distance'}
+    # Best score:  0.8482420357420357
+    # Use these hyperparameter to predict the test results
+    knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
+    knn.fit(X_train_selected, y_train)
+    acc = knn.score(X_test_selected, y_test)
+    print(f'The best test accuracy using KNeighborClassifier is: {acc}')
+
+    # add weights to each feature
+    # define the weights for each feature
+    weights = np.array([1.0, 2.0, 1.0, 0.5, 2.0, 2.0, 1.0, 1.0])
+    X_train_weighted = X_train_selected * weights
+    X_test_weighted = X_test_selected * weights
+    scaler = StandardScaler()
+    # normalize the weighted features using StandardScaler
+    X_train_weighted_std = scaler.fit_transform(X_train_weighted)
+    X_test_weighted_std = scaler.transform(X_test_weighted)
+    knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
+
+    knn.fit(X_train_weighted_std, y_train)
+    acc = knn.score(X_test_weighted_std, y_test)
+    print(f'First iteration: The best test accuracy using KNeighborClassifier is: {acc}')
 
 
 if __name__ == '__main__':
