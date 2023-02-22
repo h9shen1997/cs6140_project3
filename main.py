@@ -14,7 +14,7 @@ from pandas import DataFrame
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression, SGDClassifier, RidgeClassifier, Perceptron
 from sklearn.metrics import (accuracy_score, confusion_matrix, classification_report,
-                             ConfusionMatrixDisplay)
+                             ConfusionMatrixDisplay, roc_curve, auc)
 from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -180,7 +180,7 @@ def observe_clustering(X: DataFrame) -> None:
     plt.show()
 
 
-def predict(train_X, train_y, test_X, test_y, model) -> float:
+def predict(train_X, train_y, test_X, test_y, model):
     """Computes the accuracy of prediction using the test set based on the specified model.
 
     The type of model will be passed in as a parameter. It will fit on the training data and use the test_X to make a
@@ -193,10 +193,14 @@ def predict(train_X, train_y, test_X, test_y, model) -> float:
     :return: the accuracy score as a float number.
     """
     model.fit(train_X, train_y.values.ravel())
-    test_y_pred = model.predict(test_X)
-    accuracy = accuracy_score(test_y.values.ravel(), test_y_pred)
+    pred_y = model.predict(test_X)
+    if hasattr(model, 'predict_proba'):
+        score_y = model.predict_proba(test_X)[:, 1]
+    else:
+        score_y = 1 / (1 + np.exp(-model.decision_function(test_X)))
+    accuracy = accuracy_score(test_y.values.ravel(), pred_y)
     print(f'The accuracy computed using {model.__class__.__name__} is {accuracy * 100}%')
-    return accuracy
+    return accuracy, pred_y, score_y
 
 
 def train_eval_model(c, X_train, y_train, X_test, y_test, CLF):
@@ -256,6 +260,21 @@ def train_neural_network(X_train, y_train, X_test, y_test, dim):
 
     _, acc = model.evaluate(X_test, y_test)
     print(f'ANN Accuracy: {acc * 100}%')
+
+
+def plot_roc(y_test, y_score):
+    fpr, tpr, thresholds = roc_curve(y_test, y_score)
+    roc_auc = auc(fpr, tpr)
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC) Curve')
+    plt.legend(loc="lower right")
+    plt.show()
 
 
 def main():
@@ -351,7 +370,7 @@ def main():
 
     # use neural network
     tf.random.set_seed(0)
-    train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
+    # train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
 
     # feature engineering for max heart rate.
     # heart rate may not have linear relationship, compute quadratic and cubed terms for it
@@ -363,6 +382,13 @@ def main():
 
     # evaluate the logistic regression again using engineered features.
     train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
+
+    # plot ROC curve for 4 models
+    selected_models = ['Support Vector Machine', 'Random Forest Classifier', 'K-Nearest Neighbor', 'Logistic Regression']
+    for c in CLF:
+        if c in selected_models:
+            _, _, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, CLF[c])
+            plot_roc(y_test, y_score)
 
 
 if __name__ == '__main__':
