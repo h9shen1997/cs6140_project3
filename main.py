@@ -1,4 +1,3 @@
-import random
 from time import time
 from typing import Tuple, Dict, List
 
@@ -12,15 +11,15 @@ from _decimal import Decimal, getcontext
 from keras.layers import Dense
 from keras.models import Sequential
 from pandas import DataFrame
+from sklearn.covariance import LedoitWolf
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.linear_model import LogisticRegression, SGDClassifier, RidgeClassifier, Perceptron
 from sklearn.metrics import (accuracy_score, confusion_matrix, classification_report,
-                             ConfusionMatrixDisplay, roc_curve, auc, make_scorer)
-from sklearn.model_selection import GridSearchCV
+                             ConfusionMatrixDisplay, roc_curve, auc)
+from sklearn.model_selection import cross_val_score
 from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
-from sklearn.covariance import LedoitWolf
 from sklearn.tree import DecisionTreeClassifier
 
 
@@ -218,12 +217,11 @@ def train_eval_model(c, X_train, y_train, X_test, y_test, CLF):
         print(f'Test Accuracy={acc_test:4.3f}')
         print(classification_report(y_test, p_test))
 
-        expected_pred = model.score(X_test, y_test)
-        pred_variance = expected_pred * (1 - expected_pred)
-        mse = ((y_test - p_test) ** 2).mean()
-        bias = mse - pred_variance
-        print(f'Bias: {bias:.2f}')
-        print(f'Variance: {pred_variance:.2f}')
+        cv_scores = cross_val_score(model, X_train, y_train, cv=5)
+        bias = (1 - cv_scores.mean()) ** 2
+        variance = cv_scores.var()
+        print(f'Bias: {bias:.3f}')
+        print(f'Variance: {variance:.3f}')
 
     model_name = c
     print(model_name)
@@ -252,13 +250,21 @@ def train_eval_model(c, X_train, y_train, X_test, y_test, CLF):
 
 def train_neural_network(X_train, y_train, X_test, y_test, dim):
     model = Sequential()
-    model.add(Dense(10, input_dim=dim, activation='relu'))
+    model.add(Dense(16, input_dim=dim, activation='relu'))
+    model.add(Dense(8, activation='relu'))
+    model.add(Dense(4, activation='relu'))
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-    model.fit(X_train, y_train, epochs=100, verbose=1, batch_size=32)
+    model.fit(X_train, y_train, epochs=50, verbose=1, batch_size=32)
 
     _, acc = model.evaluate(X_test, y_test)
     print(f'ANN Accuracy: {acc * 100}%')
+
+    y_pred = model.predict(X_test)
+    fpr, tpr, _ = roc_curve(y_test, y_pred)
+    idx_fpr_01 = np.argmin(np.abs(fpr - 0.1))
+    tpr_at_fpr_01 = tpr[idx_fpr_01]
+    print(f'Feedforward neural network tpr at fpr=0.1 is: {tpr_at_fpr_01}')
 
 
 def plot_roc(y_test, y_score, model_name):
@@ -286,7 +292,8 @@ def compute_roc(y_test, y_score, fpr_threshold):
 
 
 def main():
-    np.random.seed(0)
+    np.random.seed(42)
+    tf.random.set_seed(42)
 
     # import training and test data into DataFrame
     train_df = read_csv('data/heart_train_718.csv')
@@ -378,9 +385,10 @@ def main():
         print('_' * 80)
 
     # use neural network
-    # train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
+    train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
 
-    # feature engineering for quadratic and cubic terms
+    # feature engineering for quadratic and cubic terms.
+    # these are commented out because they do not improve the results.
     # print('feature engineering quadratic and cubed terms')
     # X_train_selected['Cholesterol_squared'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 2)
     # X_test_selected['Cholesterol_squared'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 2)
@@ -406,48 +414,7 @@ def main():
     # X_test_selected = X_test_selected.drop('Cholesterol_cubic', axis=1)
 
     # after ROC, decide to use RandomForestClassifier and K-Nearest Neighbor models for 3 iterations
-
-    # RandomForestClassifier
-    print(f'\nUse GridSearchCV to obtain the best hyperparameter for RandomForestClassifier.')
-    # rfc_param_grid = {
-    #     'n_estimators': [50, 100, 200],
-    #     'criterion': ['gini', 'entropy', 'log_loss'],
-    #     'max_depth': [None, 5, 10, 20],
-    #     'min_samples_split': [2, 5, 10],
-    #     'min_samples_leaf': [1, 2, 4],
-    #     'max_features': ['sqrt', 'log2', None]
-    # }
-    # rfc = RandomForestClassifier(random_state=42)
-    # grid_search = GridSearchCV(estimator=rfc, param_grid=rfc_param_grid, cv=5)
-    # grid_search.fit(X_train_selected, y_train)
-    # print("Best hyperparameter: ", grid_search.best_params_)
-    # print("Best score: ", grid_search.best_score_)
-
-    # Best hyperparameter:  {'criterion': 'gini', 'max_depth': None, 'max_features': 'sqrt', 'min_samples_leaf': 1, 'min_samples_split': 2, 'n_estimators': 50}
-    # Use these hyperparameter to predict the test results
-    rfc = RandomForestClassifier(criterion='gini', max_depth=None, max_features='sqrt', min_samples_leaf=1,
-                                 min_samples_split=2, n_estimators=50, random_state=42)
-    rfc.fit(X_train_selected, y_train)
-    rfc.score(X_test_selected, y_test)
-    _, _, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc)
-    compute_roc(y_test, y_score, 0.1)
-
     # K-Nearest Neighbor Classifier
-    print(f'\nUse GridSearchCV to obtain the best hyperparameter for K-Nearest Neighbor Classifier.')
-    # knn_param_grid = {
-    #     'n_neighbors': [3, 5, 7, 9],
-    #     'algorithm': ['ball_tree', 'auto', 'kd_tree'],
-    #     'weights': ['uniform', 'distance'],
-    #     'metric': ['euclidean', 'manhattan'],
-    # }
-    # knn = KNeighborsClassifier()
-    # grid_search = GridSearchCV(estimator=knn, param_grid=knn_param_grid, cv=5)
-    # grid_search.fit(X_train_selected, y_train)
-    # print("Best hyperparameter: ", grid_search.best_params_)
-    # print("Best score: ", grid_search.best_score_)
-
-    # Best hyperparameter:  {'algorithm': 'ball_tree', 'metric': 'euclidean', 'n_neighbors': 3, 'weights': 'uniform'}
-    # Use these hyperparameter to predict the test results
     # First iteration
     print('\nFirst iteration using K-Nearest Neighbor')
     knn_first_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15)
@@ -466,7 +433,7 @@ def main():
     # Second iteration
     print('\nSecond iteration using K-Nearest Neighbor')
     cov = LedoitWolf().fit(X_train_selected).covariance_
-    knn_second_iter = KNeighborsClassifier(n_neighbors=9, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
+    knn_second_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
     knn_second_iter.fit(X_train_selected, y_train)
     knn_second_iter.score(X_test_selected, y_test)
     _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_second_iter)
@@ -486,12 +453,10 @@ def main():
         KNeighborsClassifier(n_neighbors=5, leaf_size=20, weights='uniform'),
         KNeighborsClassifier(n_neighbors=7, leaf_size=15, weights='uniform')
     ]
-    knn_ensemble = VotingClassifier(estimators=[('model%d' % i, model) for i, model in enumerate(knn_models)], voting='soft')
+    knn_ensemble = VotingClassifier(estimators=[('model%d' % i, model) for i, model in enumerate(knn_models)],
+                                    voting='soft')
     knn_ensemble.fit(X_train_selected, y_train)
     knn_ensemble.score(X_test_selected, y_test)
-    # knn_second_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
-    # knn_second_iter.fit(X_train_selected, y_train)
-    # knn_second_iter.score(X_test_selected, y_test)
     _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_ensemble)
     compute_roc(y_test, y_score, 0.1)
     cnf_matrix = confusion_matrix(y_test, y_pred)
@@ -502,26 +467,55 @@ def main():
     plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
     plt.show()
 
-    # add weights to each feature
-    # define the weights for each feature
-    # weights = np.array([1.0, 2.0, 1.0, 0.5, 2.0, 2.0, 1.0, 1.0])
-    # X_train_weighted = X_train_selected * weights
-    # X_test_weighted = X_test_selected * weights
-    # scaler = StandardScaler()
-    # # normalize the weighted features using StandardScaler
-    # X_train_weighted_std = scaler.fit_transform(X_train_weighted)
-    # X_test_weighted_std = scaler.transform(X_test_weighted)
-    # knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
-    #
-    # knn.fit(X_train_weighted_std, y_train)
-    # acc = knn.score(X_test_weighted_std, y_test)
-    # print(f'First iteration: The best test accuracy using KNeighborClassifier is: {acc}')
+    # RandomForestClassifier
+    # First iteration
+    print('\nFirst iteration using Random Forest Classifier')
+    rfc_first_iter = RandomForestClassifier(max_depth=5, n_estimators=100, random_state=42)
+    rfc_first_iter.fit(X_train_selected, y_train)
+    rfc_first_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_first_iter)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using Random Forest 1st iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
+
+    # Second iteration
+    print('\nSecond iteration using Random Forest Classifier')
+    rfc_second_iter = RandomForestClassifier(max_depth=10, n_estimators=100, min_samples_split=4, random_state=42)
+    rfc_second_iter.fit(X_train_selected, y_train)
+    rfc_second_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_second_iter)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using Random Forest 2nd iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
+
+    # Third iteration
+    print('\nThird iteration using Random Forest Classifier')
+    rfc_third_iter = RandomForestClassifier(max_depth=10, n_estimators=50, min_samples_split=4, max_features=None,
+                                            random_state=42)
+    rfc_third_iter.fit(X_train_selected, y_train)
+    rfc_third_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_third_iter)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using Random Forest 3rd iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
 
 
 if __name__ == '__main__':
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
-    np.random.seed(42)
-    tf.random.set_seed(42)
-    random.seed(42)
     main()
