@@ -1,3 +1,4 @@
+import random
 from time import time
 from typing import Tuple, Dict, List
 
@@ -11,20 +12,16 @@ from _decimal import Decimal, getcontext
 from keras.layers import Dense
 from keras.models import Sequential
 from pandas import DataFrame
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.linear_model import LogisticRegression, SGDClassifier, RidgeClassifier, Perceptron
 from sklearn.metrics import (accuracy_score, confusion_matrix, classification_report,
-                             ConfusionMatrixDisplay, roc_curve, auc)
+                             ConfusionMatrixDisplay, roc_curve, auc, make_scorer)
+from sklearn.model_selection import GridSearchCV
 from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
+from sklearn.covariance import LedoitWolf
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.preprocessing import StandardScaler
-
-# set the display of DataFrame to display full rows and columns.
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
 
 
 def read_csv(filename: str) -> DataFrame:
@@ -194,13 +191,13 @@ def predict(train_X, train_y, test_X, test_y, model):
     :param model: the passed-in model.
     :return: the accuracy score as a float number.
     """
-    model.fit(train_X, train_y.values.ravel())
+    model.fit(train_X, train_y)
     pred_y = model.predict(test_X)
     if hasattr(model, 'predict_proba'):
         score_y = model.predict_proba(test_X)[:, 1]
     else:
         score_y = 1 / (1 + np.exp(-model.decision_function(test_X)))
-    accuracy = accuracy_score(test_y.values.ravel(), pred_y)
+    accuracy = accuracy_score(test_y, pred_y)
     print(f'The accuracy computed using {model.__class__.__name__} is {accuracy * 100}%')
     return accuracy, pred_y, score_y
 
@@ -265,15 +262,12 @@ def train_neural_network(X_train, y_train, X_test, y_test, dim):
 
 
 def plot_roc(y_test, y_score, model_name):
-    fpr, tpr, thresholds = roc_curve(y_test, y_score)
+    fpr, tpr, idx = compute_roc(y_test, y_score, 0.1)
     roc_auc = auc(fpr, tpr)
     plt.figure()
     plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot(fpr[idx], tpr[idx], 'x', label='FPR = 0.1', color='r')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, label='Using a random classifier', linestyle='--')
-    # find the operating point at which fpr is 0.1
-    idx = (np.abs(fpr - 0.05)).argmin()
-    plt.plot(fpr[idx], tpr[idx], 'x', label='FPR = 0.05', color='r')
-    print(f'The true positive rate at fpr=0.05 is: {tpr[idx]:.2f}')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
@@ -282,6 +276,13 @@ def plot_roc(y_test, y_score, model_name):
     plt.legend(loc="lower right")
     plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
     plt.show()
+
+
+def compute_roc(y_test, y_score, fpr_threshold):
+    fpr, tpr, thresholds = roc_curve(y_test, y_score)
+    idx = (np.abs(fpr - fpr_threshold)).argmin()
+    print(f'The true positive rate at fpr={fpr_threshold} is: {tpr[idx]:.3f}')
+    return fpr, tpr, idx
 
 
 def main():
@@ -309,21 +310,21 @@ def main():
     column_names = X_train.columns
 
     # feature selection
-    rfc = RandomForestClassifier(random_state=0)
+    rfc = RandomForestClassifier(random_state=42)
     rfc.fit(X, y)
-    importances = rfc.feature_importances_
+    importance = rfc.feature_importances_
 
-    feature_importances = {}
-    for i in range(len(importances)):
-        feature_importances[X.columns[i]] = {'importance': importances[i], 'index': i}
+    feature_importance = {}
+    for i in range(len(importance)):
+        feature_importance[X.columns[i]] = {'importance': importance[i], 'index': i}
 
-    sorted_feature_importances = sorted(feature_importances.items(), key=lambda x: x[1]['importance'], reverse=True)
+    sorted_feature_importance = sorted(feature_importance.items(), key=lambda x: x[1]['importance'], reverse=True)
     # Print the feature ranking
     print("Feature ranking:")
-    for f in range(len(sorted_feature_importances)):
+    for f in range(len(sorted_feature_importance)):
         print(
-            f"{f + 1}. {sorted_feature_importances[f][0]} (index: {sorted_feature_importances[f][1]['index']}, "
-            f"importance: {sorted_feature_importances[f][1]['importance']})")
+            f"{f + 1}. {sorted_feature_importance[f][0]} (index: {sorted_feature_importance[f][1]['index']}, "
+            f"importance: {sorted_feature_importance[f][1]['importance']})")
 
     # visualize the normalized training data using boxplot.
     # significant signals in the independent variables.
@@ -353,15 +354,16 @@ def main():
     # observe natural clustering within the training data by projecting it to 2-D
     observe_clustering(X_train)
 
-    CLF = {'Logistic Regression': LogisticRegression(C=1.6, random_state=0),
-           'SGDCClassifier L2': SGDClassifier(alpha=1e-5, penalty='l2', random_state=0),
-           'SGDCClassifier L1': SGDClassifier(alpha=1e-5, penalty='l1', random_state=0),
-           'Ridge Classifier': RidgeClassifier(tol=1e-2, solver='sag', random_state=0),
-           'Perceptron': Perceptron(random_state=0), 'BernoulliNB': BernoulliNB(alpha=.01),
-           'K-Nearest Neighbor': KNeighborsClassifier(n_neighbors=5, weights='distance', p=2),
-           'Support Vector Machine': SVC(C=1.0, tol=1e-3, kernel='rbf', gamma='scale', random_state=0),
-           'Decision Tree Classifier': DecisionTreeClassifier(random_state=0),
-           'Random Forest Classifier': RandomForestClassifier(random_state=0)}
+    CLF = {'Logistic Regression': LogisticRegression(random_state=42),
+           'SGDCClassifier L2': SGDClassifier(penalty='l2', random_state=42),
+           'SGDCClassifier L1': SGDClassifier(penalty='l1', random_state=42),
+           'Ridge Classifier': RidgeClassifier(random_state=42),
+           'Perceptron': Perceptron(random_state=42),
+           'BernoulliNB': BernoulliNB(),
+           'K-Nearest Neighbor': KNeighborsClassifier(),
+           'Support Vector Machine': SVC(random_state=42),
+           'Decision Tree Classifier': DecisionTreeClassifier(random_state=42),
+           'Random Forest Classifier': RandomForestClassifier(random_state=42)}
 
     print('\nAvailable classifiers:')
     for c in CLF:
@@ -376,19 +378,17 @@ def main():
         print('_' * 80)
 
     # use neural network
-    tf.random.set_seed(0)
     # train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
 
-    # feature engineering for max heart rate.
-    # heart rate may not have linear relationship, compute quadratic and cubed terms for it
-    print('feature engineering quadratic and cubed term for ST_Slope')
-    X_train_selected['Cholesterol_squared'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 2)
-    X_test_selected['Cholesterol_squared'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 2)
-    X_train_selected['Cholesterol_cubic'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 3)
-    X_test_selected['Cholesterol_cubic'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 3)
+    # feature engineering for quadratic and cubic terms
+    # print('feature engineering quadratic and cubed terms')
+    # X_train_selected['Cholesterol_squared'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 2)
+    # X_test_selected['Cholesterol_squared'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 2)
+    # X_train_selected['Cholesterol_cubic'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 3)
+    # X_test_selected['Cholesterol_cubic'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 3)
 
     # evaluate the logistic regression again using engineered features.
-    train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
+    # train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
 
     # plot ROC curve for 4 models
     selected_models = ['Support Vector Machine', 'Random Forest Classifier', 'K-Nearest Neighbor',
@@ -400,77 +400,128 @@ def main():
             plot_roc(y_test, y_score, c)
 
     # drop the engineered features as they do not improve the test accuracy.
-    X_train_selected = X_train_selected.drop('Cholesterol_squared', axis=1)
-    X_train_selected = X_train_selected.drop('Cholesterol_cubic', axis=1)
-    X_test_selected = X_test_selected.drop('Cholesterol_squared', axis=1)
-    X_test_selected = X_test_selected.drop('Cholesterol_cubic', axis=1)
+    # X_train_selected = X_train_selected.drop('Cholesterol_squared', axis=1)
+    # X_train_selected = X_train_selected.drop('Cholesterol_cubic', axis=1)
+    # X_test_selected = X_test_selected.drop('Cholesterol_squared', axis=1)
+    # X_test_selected = X_test_selected.drop('Cholesterol_cubic', axis=1)
 
     # after ROC, decide to use RandomForestClassifier and K-Nearest Neighbor models for 3 iterations
+
     # RandomForestClassifier
-    print(f'\nUse GridSearchCV to obtain the best hyper-parameter for RandomForestClassifier.')
-    rfc_param_grid = {
-        'n_estimators': [50, 100, 200],
-        'criterion': ['gini', 'entropy', 'log_loss'],
-        'max_depth': [None, 5, 10, 20],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'max_features': ['sqrt', 'log2', None]
-    }
-    # rfc = RandomForestClassifier()
+    print(f'\nUse GridSearchCV to obtain the best hyperparameter for RandomForestClassifier.')
+    # rfc_param_grid = {
+    #     'n_estimators': [50, 100, 200],
+    #     'criterion': ['gini', 'entropy', 'log_loss'],
+    #     'max_depth': [None, 5, 10, 20],
+    #     'min_samples_split': [2, 5, 10],
+    #     'min_samples_leaf': [1, 2, 4],
+    #     'max_features': ['sqrt', 'log2', None]
+    # }
+    # rfc = RandomForestClassifier(random_state=42)
     # grid_search = GridSearchCV(estimator=rfc, param_grid=rfc_param_grid, cv=5)
     # grid_search.fit(X_train_selected, y_train)
-    # # print the best hyperparameter and the corresponding score
     # print("Best hyperparameter: ", grid_search.best_params_)
     # print("Best score: ", grid_search.best_score_)
 
-    # Best hyperparameter:  {'criterion': 'log_loss', 'max_depth': None, 'max_features': 'log2', 'min_samples_leaf':
-    # 1, 'min_samples_split': 10, 'n_estimators': 100}
-    # Best score:  0.8566336441336443 use these hyperparameter to
+    # Best hyperparameter:  {'criterion': 'gini', 'max_depth': None, 'max_features': 'sqrt', 'min_samples_leaf': 1, 'min_samples_split': 2, 'n_estimators': 50}
     # Use these hyperparameter to predict the test results
-    rfc = RandomForestClassifier(criterion='log_loss', max_depth=None, max_features='log2', min_samples_leaf=1,
-                                 min_samples_split=10, n_estimators=100, random_state=0)
+    rfc = RandomForestClassifier(criterion='gini', max_depth=None, max_features='sqrt', min_samples_leaf=1,
+                                 min_samples_split=2, n_estimators=50, random_state=42)
     rfc.fit(X_train_selected, y_train)
-    acc = rfc.score(X_test_selected, y_test)
-    print(f'The best test accuracy using RandomForestClassifier is: {acc}')
+    rfc.score(X_test_selected, y_test)
+    _, _, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc)
+    compute_roc(y_test, y_score, 0.1)
 
     # K-Nearest Neighbor Classifier
-    print(f'\nUse GridSearchCV to obtain the best hyper-parameter for K-Nearest Neighbor Classifier.')
-    knn_param_grid = {
-        'n_neighbors': [3, 5, 7, 9],
-        'algorithm': ['ball_tree', 'auto', 'kd_tree'],
-        'weights': ['uniform', 'distance'],
-        'metric': ['euclidean', 'manhattan'],
-    }
+    print(f'\nUse GridSearchCV to obtain the best hyperparameter for K-Nearest Neighbor Classifier.')
+    # knn_param_grid = {
+    #     'n_neighbors': [3, 5, 7, 9],
+    #     'algorithm': ['ball_tree', 'auto', 'kd_tree'],
+    #     'weights': ['uniform', 'distance'],
+    #     'metric': ['euclidean', 'manhattan'],
+    # }
     # knn = KNeighborsClassifier()
     # grid_search = GridSearchCV(estimator=knn, param_grid=knn_param_grid, cv=5)
     # grid_search.fit(X_train_selected, y_train)
-    # # print the best hyperparameter and the corresponding score
     # print("Best hyperparameter: ", grid_search.best_params_)
     # print("Best score: ", grid_search.best_score_)
 
-    # Best hyperparameter:  {'algorithm': 'ball_tree', 'metric': 'euclidean', 'n_neighbors': 9, 'weights': 'distance'}
-    # Best score:  0.8482420357420357
+    # Best hyperparameter:  {'algorithm': 'ball_tree', 'metric': 'euclidean', 'n_neighbors': 3, 'weights': 'uniform'}
     # Use these hyperparameter to predict the test results
-    knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
-    knn.fit(X_train_selected, y_train)
-    acc = knn.score(X_test_selected, y_test)
-    print(f'The best test accuracy using KNeighborClassifier is: {acc}')
+    # First iteration
+    print('\nFirst iteration using K-Nearest Neighbor')
+    knn_first_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15)
+    knn_first_iter.fit(X_train_selected, y_train)
+    knn_first_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_first_iter)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using K-Nearest Neighbor 1st iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
+
+    # Second iteration
+    print('\nSecond iteration using K-Nearest Neighbor')
+    cov = LedoitWolf().fit(X_train_selected).covariance_
+    knn_second_iter = KNeighborsClassifier(n_neighbors=9, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
+    knn_second_iter.fit(X_train_selected, y_train)
+    knn_second_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_second_iter)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using K-Nearest Neighbor 2nd iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
+
+    # Third iteration
+    print('\nThird iteration using K-Nearest Neighbor')
+    knn_models = [
+        KNeighborsClassifier(n_neighbors=5, leaf_size=15, weights='uniform'),
+        KNeighborsClassifier(n_neighbors=5, leaf_size=20, weights='uniform'),
+        KNeighborsClassifier(n_neighbors=7, leaf_size=15, weights='uniform')
+    ]
+    knn_ensemble = VotingClassifier(estimators=[('model%d' % i, model) for i, model in enumerate(knn_models)], voting='soft')
+    knn_ensemble.fit(X_train_selected, y_train)
+    knn_ensemble.score(X_test_selected, y_test)
+    # knn_second_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
+    # knn_second_iter.fit(X_train_selected, y_train)
+    # knn_second_iter.score(X_test_selected, y_test)
+    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_ensemble)
+    compute_roc(y_test, y_score, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure()
+    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+    disp.plot()
+    plt.title('Confusion Matrix using K-Nearest Neighbor 3rd iteration')
+    plt.savefig(f'images/task4_{plt.gca().get_title()}.png')
+    plt.show()
 
     # add weights to each feature
     # define the weights for each feature
-    weights = np.array([1.0, 2.0, 1.0, 0.5, 2.0, 2.0, 1.0, 1.0])
-    X_train_weighted = X_train_selected * weights
-    X_test_weighted = X_test_selected * weights
-    scaler = StandardScaler()
-    # normalize the weighted features using StandardScaler
-    X_train_weighted_std = scaler.fit_transform(X_train_weighted)
-    X_test_weighted_std = scaler.transform(X_test_weighted)
-    knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
-
-    knn.fit(X_train_weighted_std, y_train)
-    acc = knn.score(X_test_weighted_std, y_test)
-    print(f'First iteration: The best test accuracy using KNeighborClassifier is: {acc}')
+    # weights = np.array([1.0, 2.0, 1.0, 0.5, 2.0, 2.0, 1.0, 1.0])
+    # X_train_weighted = X_train_selected * weights
+    # X_test_weighted = X_test_selected * weights
+    # scaler = StandardScaler()
+    # # normalize the weighted features using StandardScaler
+    # X_train_weighted_std = scaler.fit_transform(X_train_weighted)
+    # X_test_weighted_std = scaler.transform(X_test_weighted)
+    # knn = KNeighborsClassifier(n_neighbors=5, algorithm='ball_tree', metric='euclidean', weights='distance')
+    #
+    # knn.fit(X_train_weighted_std, y_train)
+    # acc = knn.score(X_test_weighted_std, y_test)
+    # print(f'First iteration: The best test accuracy using KNeighborClassifier is: {acc}')
 
 
 if __name__ == '__main__':
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.max_columns', None)
+    np.random.seed(42)
+    tf.random.set_seed(42)
+    random.seed(42)
     main()
