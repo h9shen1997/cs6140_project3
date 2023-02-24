@@ -104,6 +104,11 @@ def clean_data(df: DataFrame) -> DataFrame:
 
 
 def normalize_data(df: DataFrame) -> DataFrame:
+    """Normalizes the dataset on the scale of standard deviation.
+
+    :param df: the cleaned pandas DataFrame
+    :return: normalized data
+    """
     A = df.values
     m = np.mean(A, axis=0)
     D = A - m
@@ -184,7 +189,18 @@ def observe_clustering(X: DataFrame) -> None:
     plt.show()
 
 
-def predict(X_train, y_train, X_test, y_test, model):
+def predict(X_train: DataFrame, y_train: DataFrame, X_test: DataFrame, y_test: DataFrame, model: Any) -> Tuple[float, float, Any, Any, Any]:
+    """Predicts the probabilities of each category in y.
+
+    If the model passed-in does not have the predict_proba attribute, we will use CalibratedClassifierCV to transform
+    the model and make an estimate.
+    :param X_train: training X
+    :param y_train: training y
+    :param X_test: testing X
+    :param y_test: testing y
+    :param model: the trained model. Note that this model is already trained and retrain is not required.
+    :return:
+    """
     t0 = time()
     y_train_pred, y_test_pred = model.predict(X_train), model.predict(X_test)
     t = time() - t0
@@ -200,7 +216,16 @@ def predict(X_train, y_train, X_test, y_test, model):
     return t, test_acc, y_test_pred, y_train_pred, y_test_prob
 
 
-def analyze_models(X_train, y_train, X_test, y_test) -> Any:
+def analyze_models(X_train: DataFrame, y_train: DataFrame, X_test: DataFrame, y_test: DataFrame) -> Any:
+    """Analyzes all the models based on the passed in training and test data.
+
+    :param X_train: training X
+    :param y_train: training y
+    :param X_test: testing X
+    :param y_test: testing y
+    :return:
+    """
+    # uses 10 models to make prediction, set the random_state to 42 for all so that we have reproducible results.
     CLF = {'Logistic Regression': LogisticRegression(random_state=42),
            'SGDCClassifier L2': SGDClassifier(penalty='l2', random_state=42),
            'SGDCClassifier L1': SGDClassifier(penalty='l1', random_state=42),
@@ -212,11 +237,17 @@ def analyze_models(X_train, y_train, X_test, y_test) -> Any:
            'Decision Tree Classifier': DecisionTreeClassifier(random_state=42),
            'Random Forest Classifier': RandomForestClassifier(random_state=42)}
 
+    # print out the available classifier for view.
     print('\nAvailable classifiers:')
     for c in CLF:
         print('- ', c)
 
-    def train_eval_model(model_name):
+    def train_eval_model(model_name: str) -> None:
+        """Trains and evaluates the model using metrics, including accruacy, f1 score, confusion matrix, bias, variance and plot the confusion matrix.
+
+        :param model_name: a string value that indicates the name of the classifier
+        :return: None
+        """
         def eval_model():
             acc_train = accuracy_score(y_train, y_train_pred)
             print(f'Training Accuracy = {acc_train}')
@@ -253,6 +284,7 @@ def analyze_models(X_train, y_train, X_test, y_test) -> Any:
         plt.title(f'Confusion Matrix using {model_name}')
         plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
 
+    # evaluate all models and print results to console
     for c in CLF:
         train_eval_model(c)
         print('_' * 80)
@@ -260,7 +292,16 @@ def analyze_models(X_train, y_train, X_test, y_test) -> Any:
     return CLF
 
 
-def train_neural_network(X_train, y_train, X_test, y_test, dim):
+def train_neural_network(X_train: DataFrame, y_train: DataFrame, X_test: DataFrame, y_test: DataFrame, dim: int) -> None:
+    """Trains a feedforward neural network.
+
+    :param X_train: training X
+    :param y_train: training y
+    :param X_test: testing X
+    :param y_test: training y
+    :param dim: the dimensionality of data, aka, the number of features
+    :return: None
+    """
     model = Sequential()
     model.add(Dense(16, input_dim=dim, activation='relu'))
     model.add(Dense(8, activation='relu'))
@@ -279,7 +320,14 @@ def train_neural_network(X_train, y_train, X_test, y_test, dim):
     print(f'Feedforward neural network tpr at fpr=0.1 is: {tpr_at_fpr_01}')
 
 
-def plot_roc(y_test, y_score, model_name):
+def plot_roc(y_test: DataFrame, y_score: Any, model_name: str) -> None:
+    """Plots the receiver operating characteristics curve and also displays a mark at FPR=0.1.
+
+    :param y_test: testing y.
+    :param y_score: the probabilities of each category in the y.
+    :param model_name: a string value indicate the model name in the dictionary.
+    :return: None
+    """
     fpr, tpr, idx = compute_roc(y_test, y_score, 0.1)
     roc_auc = auc(fpr, tpr)
     plt.figure()
@@ -295,7 +343,14 @@ def plot_roc(y_test, y_score, model_name):
     plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
 
 
-def compute_roc(y_test, y_score, fpr_threshold):
+def compute_roc(y_test: DataFrame, y_score: Any, fpr_threshold: float) -> Tuple[Any, Any, int]:
+    """Computes the TPR at a specified FPR.
+
+    :param y_test: testing y.
+    :param y_score: the probabilities of each category in the y.
+    :param fpr_threshold: the specified FPR.
+    :return: a tuple of false positive rate, true positive rate, and the index on the x-axis of the desired TPR.
+    """
     fpr, tpr, thresholds = roc_curve(y_test, y_score)
     idx = (np.abs(fpr - fpr_threshold)).argmin()
     print(f'The true positive rate at fpr={fpr_threshold} is: {tpr[idx]}')
@@ -382,11 +437,8 @@ def main():
     # X_train['Cholesterol_cubic'] = X_train['Cholesterol'].apply(lambda x: x ** 3)
     # X_test['Cholesterol_cubic'] = X_test['Cholesterol'].apply(lambda x: x ** 3)
 
-    # use neural network
+    # use feedforward neural network
     train_neural_network(X_train, y_train, X_test, y_test, 8)
-
-    # evaluate the logistic regression again using engineered features.
-    # train_eval_model('Logistic Regression', X_train, y_train, X_test, y_test, CLF)
 
     # plot ROC curve for 4 models
     selected_models = ['Support Vector Machine',
@@ -496,6 +548,7 @@ def main():
 
 
 if __name__ == '__main__':
+    # set the random seed
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
     random.seed(42)
