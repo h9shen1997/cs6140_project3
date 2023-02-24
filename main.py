@@ -1,5 +1,11 @@
+"""
+CS6140 Project 3
+@filename: main.py
+@author: Haotian Shen, Qiaozhi Liu
+"""
+import random
 from time import time
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,12 +17,12 @@ from _decimal import Decimal, getcontext
 from keras.layers import Dense
 from keras.models import Sequential
 from pandas import DataFrame
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.covariance import LedoitWolf
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.linear_model import LogisticRegression, SGDClassifier, RidgeClassifier, Perceptron
 from sklearn.metrics import (accuracy_score, confusion_matrix, classification_report,
                              ConfusionMatrixDisplay, roc_curve, auc)
-from sklearn.model_selection import cross_val_score
 from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -178,74 +184,80 @@ def observe_clustering(X: DataFrame) -> None:
     plt.show()
 
 
-def predict(train_X, train_y, test_X, test_y, model):
-    """Computes the accuracy of prediction using the test set based on the specified model.
-
-    The type of model will be passed in as a parameter. It will fit on the training data and use the test_X to make a
-    prediction on y data and calculate the accuracy score.
-    :param train_X: DataFrame
-    :param train_y: DataFrame
-    :param test_X: DataFrame
-    :param test_y: DataFrame
-    :param model: the passed-in model.
-    :return: the accuracy score as a float number.
-    """
-    model.fit(train_X, train_y)
-    pred_y = model.predict(test_X)
-    if hasattr(model, 'predict_proba'):
-        score_y = model.predict_proba(test_X)[:, 1]
-    else:
-        score_y = 1 / (1 + np.exp(-model.decision_function(test_X)))
-    accuracy = accuracy_score(test_y, pred_y)
-    print(f'The accuracy computed using {model.__class__.__name__} is {accuracy * 100}%')
-    return accuracy, pred_y, score_y
-
-
-def train_eval_model(c, X_train, y_train, X_test, y_test, CLF):
-    def pred():
-        t0 = time()
-        p_train, p_test = model.predict(X_train), model.predict(X_test)
-        t = time() - t0
-        return t, p_train, p_test
-
-    def eval_model():
-        acc_train = accuracy_score(y_train, p_train)
-        print(f'Training Accuracy={acc_train:4.3f}')
-        print(classification_report(y_train, p_train))
-
-        acc_test = accuracy_score(y_test, p_test)
-        print(f'Test Accuracy={acc_test:4.3f}')
-        print(classification_report(y_test, p_test))
-
-        cv_scores = cross_val_score(model, X_train, y_train, cv=5)
-        bias = (1 - cv_scores.mean()) ** 2
-        variance = cv_scores.var()
-        print(f'Bias: {bias:.3f}')
-        print(f'Variance: {variance:.3f}')
-
-    model_name = c
-    print(model_name)
-    print(X_train.shape)
-    print(y_train.shape)
-    model = CLF[c]
-
+def predict(X_train, y_train, X_test, y_test, model):
     t0 = time()
-    model.fit(X_train, y_train)
-    time_train = time() - t0
-    print(f'Training time = {time_train:4.2f}')
+    y_train_pred, y_test_pred = model.predict(X_train), model.predict(X_test)
+    t = time() - t0
+    if hasattr(model, 'predict_proba'):
+        y_test_prob = model.predict_proba(X_test)[:, 1]
+    else:
+        calibrator = CalibratedClassifierCV(model, cv='prefit')
+        model = calibrator.fit(X_train, y_train)
+        y_test_prob = model.predict_proba(X_test)[:, 1]
 
-    # trained model
-    CLF[c] = model
-    t, p_train, p_test = pred()
-    print(f'Validation and Test time = {t:4.2f}')
-    eval_model()
-    print('Generating Confusion Matrix')
-    cnf_matrix = confusion_matrix(y_test, p_test)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
-    disp.plot()
-    plt.title(f'Confusion Matrix using {model_name}')
-    plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
-    plt.show()
+    test_acc = accuracy_score(y_test, y_test_pred)
+    print(f'The accuracy computed using {model.__class__.__name__} is {test_acc * 100}%')
+    return t, test_acc, y_test_pred, y_train_pred, y_test_prob
+
+
+def analyze_models(X_train, y_train, X_test, y_test) -> Any:
+    CLF = {'Logistic Regression': LogisticRegression(random_state=42),
+           'SGDCClassifier L2': SGDClassifier(penalty='l2', random_state=42),
+           'SGDCClassifier L1': SGDClassifier(penalty='l1', random_state=42),
+           'Ridge Classifier': RidgeClassifier(random_state=42),
+           'Perceptron': Perceptron(random_state=42),
+           'BernoulliNB': BernoulliNB(),
+           'K-Nearest Neighbor': KNeighborsClassifier(),
+           'Support Vector Machine': SVC(random_state=42, probability=True),
+           'Decision Tree Classifier': DecisionTreeClassifier(random_state=42),
+           'Random Forest Classifier': RandomForestClassifier(random_state=42)}
+
+    print('\nAvailable classifiers:')
+    for c in CLF:
+        print('- ', c)
+
+    def train_eval_model(model_name):
+        def eval_model():
+            acc_train = accuracy_score(y_train, y_train_pred)
+            print(f'Training Accuracy = {acc_train}')
+            print(classification_report(y_train, y_train_pred))
+
+            acc_test = accuracy_score(y_test, y_test_pred)
+            print(f'Test Accuracy = {acc_test}')
+            print(classification_report(y_test, y_test_pred))
+
+            bias = 1 - acc_train
+            variance = (1 - acc_test) - bias
+            print(f'Bias: {bias}')
+            print(f'Variance: {variance}')
+
+        print(model_name)
+        print(X_train.shape)
+        print(y_train.shape)
+        model = CLF[model_name]
+
+        t0 = time()
+        model.fit(X_train, y_train)
+        training_t = time() - t0
+        print(f'Training time = {training_t}')
+
+        # save the trained models
+        CLF[model_name] = model
+        t, test_acc, y_test_pred, y_train_pred, y_test_score = predict(X_train, y_train, X_test, y_test, model)
+        print(f'Validation and Test time = {t}')
+        eval_model()
+        print('Generating Confusion Matrix')
+        cnf_matrix = confusion_matrix(y_test, y_test_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
+        disp.plot()
+        plt.title(f'Confusion Matrix using {model_name}')
+        plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
+
+    for c in CLF:
+        train_eval_model(c)
+        print('_' * 80)
+        print('_' * 80)
+    return CLF
 
 
 def train_neural_network(X_train, y_train, X_test, y_test, dim):
@@ -271,7 +283,7 @@ def plot_roc(y_test, y_score, model_name):
     fpr, tpr, idx = compute_roc(y_test, y_score, 0.1)
     roc_auc = auc(fpr, tpr)
     plt.figure()
-    plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc})')
     plt.plot(fpr[idx], tpr[idx], 'x', label='FPR = 0.1', color='r')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, label='Using a random classifier', linestyle='--')
     plt.xlim([0.0, 1.0])
@@ -281,20 +293,16 @@ def plot_roc(y_test, y_score, model_name):
     plt.title(f'Receiver Operating Characteristic Curve using {model_name}')
     plt.legend(loc="lower right")
     plt.savefig(f'images/task3_{plt.gca().get_title()}.png')
-    plt.show()
 
 
 def compute_roc(y_test, y_score, fpr_threshold):
     fpr, tpr, thresholds = roc_curve(y_test, y_score)
     idx = (np.abs(fpr - fpr_threshold)).argmin()
-    print(f'The true positive rate at fpr={fpr_threshold} is: {tpr[idx]:.3f}')
+    print(f'The true positive rate at fpr={fpr_threshold} is: {tpr[idx]}')
     return fpr, tpr, idx
 
 
 def main():
-    np.random.seed(42)
-    tf.random.set_seed(42)
-
     # import training and test data into DataFrame
     train_df = read_csv('data/heart_train_718.csv')
     test_df = read_csv('data/heart_test_200.csv')
@@ -361,68 +369,45 @@ def main():
     # observe natural clustering within the training data by projecting it to 2-D
     observe_clustering(X_train)
 
-    CLF = {'Logistic Regression': LogisticRegression(random_state=42),
-           'SGDCClassifier L2': SGDClassifier(penalty='l2', random_state=42),
-           'SGDCClassifier L1': SGDClassifier(penalty='l1', random_state=42),
-           'Ridge Classifier': RidgeClassifier(random_state=42),
-           'Perceptron': Perceptron(random_state=42),
-           'BernoulliNB': BernoulliNB(),
-           'K-Nearest Neighbor': KNeighborsClassifier(),
-           'Support Vector Machine': SVC(random_state=42),
-           'Decision Tree Classifier': DecisionTreeClassifier(random_state=42),
-           'Random Forest Classifier': RandomForestClassifier(random_state=42)}
-
-    print('\nAvailable classifiers:')
-    for c in CLF:
-        print('- ', c)
-
     # use the selected salient features to train different models
-    X_train_selected = X_train.loc[:, [column_names[i] for i in [0, 2, 3, 4, 7, 8, 9, 10]]]
-    X_test_selected = X_test.loc[:, [column_names[i] for i in [0, 2, 3, 4, 7, 8, 9, 10]]]
-    for c in CLF:
-        train_eval_model(c, X_train_selected, y_train, X_test_selected, y_test, CLF)
-        print('_' * 80)
-        print('_' * 80)
-
-    # use neural network
-    train_neural_network(X_train_selected, y_train, X_test_selected, y_test, 8)
+    X_train = X_train.drop(['Sex', 'FastingBS', 'RestingECG'], axis=1)
+    X_test = X_test.drop(['Sex', 'FastingBS', 'RestingECG'], axis=1)
+    CLF = analyze_models(X_train, y_train, X_test, y_test)
 
     # feature engineering for quadratic and cubic terms.
     # these are commented out because they do not improve the results.
     # print('feature engineering quadratic and cubed terms')
-    # X_train_selected['Cholesterol_squared'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 2)
-    # X_test_selected['Cholesterol_squared'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 2)
-    # X_train_selected['Cholesterol_cubic'] = X_train_selected['Cholesterol'].apply(lambda x: x ** 3)
-    # X_test_selected['Cholesterol_cubic'] = X_test_selected['Cholesterol'].apply(lambda x: x ** 3)
+    # X_train['Cholesterol_squared'] = X_train['Cholesterol'].apply(lambda x: x ** 2)
+    # X_test['Cholesterol_squared'] = X_test['Cholesterol'].apply(lambda x: x ** 2)
+    # X_train['Cholesterol_cubic'] = X_train['Cholesterol'].apply(lambda x: x ** 3)
+    # X_test['Cholesterol_cubic'] = X_test['Cholesterol'].apply(lambda x: x ** 3)
+
+    # use neural network
+    train_neural_network(X_train, y_train, X_test, y_test, 8)
 
     # evaluate the logistic regression again using engineered features.
-    # train_eval_model('Logistic Regression', X_train_selected, y_train, X_test_selected, y_test, CLF)
+    # train_eval_model('Logistic Regression', X_train, y_train, X_test, y_test, CLF)
 
     # plot ROC curve for 4 models
-    selected_models = ['Support Vector Machine', 'Random Forest Classifier', 'K-Nearest Neighbor',
+    selected_models = ['Support Vector Machine',
+                       'Random Forest Classifier',
+                       'K-Nearest Neighbor',
                        'Logistic Regression']
     print(f'\nThe selected models for ROC curve are {selected_models}')
     for c in CLF:
         if c in selected_models:
-            _, _, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, CLF[c])
-            plot_roc(y_test, y_score, c)
-
-    # drop the engineered features as they do not improve the test accuracy.
-    # X_train_selected = X_train_selected.drop('Cholesterol_squared', axis=1)
-    # X_train_selected = X_train_selected.drop('Cholesterol_cubic', axis=1)
-    # X_test_selected = X_test_selected.drop('Cholesterol_squared', axis=1)
-    # X_test_selected = X_test_selected.drop('Cholesterol_cubic', axis=1)
+            _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, CLF[c])
+            plot_roc(y_test, y_test_prob, c)
 
     # after ROC, decide to use RandomForestClassifier and K-Nearest Neighbor models for 3 iterations
     # K-Nearest Neighbor Classifier
     # First iteration
     print('\nFirst iteration using K-Nearest Neighbor')
     knn_first_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15)
-    knn_first_iter.fit(X_train_selected, y_train)
-    knn_first_iter.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_first_iter)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    knn_first_iter.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, knn_first_iter)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -432,13 +417,12 @@ def main():
 
     # Second iteration
     print('\nSecond iteration using K-Nearest Neighbor')
-    cov = LedoitWolf().fit(X_train_selected).covariance_
+    cov = LedoitWolf().fit(X_train).covariance_
     knn_second_iter = KNeighborsClassifier(n_neighbors=7, leaf_size=15, metric='mahalanobis', metric_params={'V': cov})
-    knn_second_iter.fit(X_train_selected, y_train)
-    knn_second_iter.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_second_iter)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    knn_second_iter.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, knn_second_iter)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -455,11 +439,10 @@ def main():
     ]
     knn_ensemble = VotingClassifier(estimators=[('model%d' % i, model) for i, model in enumerate(knn_models)],
                                     voting='soft')
-    knn_ensemble.fit(X_train_selected, y_train)
-    knn_ensemble.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, knn_ensemble)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    knn_ensemble.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, knn_ensemble)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -471,11 +454,10 @@ def main():
     # First iteration
     print('\nFirst iteration using Random Forest Classifier')
     rfc_first_iter = RandomForestClassifier(max_depth=5, n_estimators=100, random_state=42)
-    rfc_first_iter.fit(X_train_selected, y_train)
-    rfc_first_iter.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_first_iter)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    rfc_first_iter.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, rfc_first_iter)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -486,11 +468,10 @@ def main():
     # Second iteration
     print('\nSecond iteration using Random Forest Classifier')
     rfc_second_iter = RandomForestClassifier(max_depth=10, n_estimators=100, min_samples_split=4, random_state=42)
-    rfc_second_iter.fit(X_train_selected, y_train)
-    rfc_second_iter.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_second_iter)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    rfc_second_iter.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, rfc_second_iter)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -502,11 +483,10 @@ def main():
     print('\nThird iteration using Random Forest Classifier')
     rfc_third_iter = RandomForestClassifier(max_depth=10, n_estimators=50, min_samples_split=4, max_features=None,
                                             random_state=42)
-    rfc_third_iter.fit(X_train_selected, y_train)
-    rfc_third_iter.score(X_test_selected, y_test)
-    _, y_pred, y_score = predict(X_train_selected, y_train, X_test_selected, y_test, rfc_third_iter)
-    compute_roc(y_test, y_score, 0.1)
-    cnf_matrix = confusion_matrix(y_test, y_pred)
+    rfc_third_iter.fit(X_train, y_train)
+    _, test_acc, y_test_pred, y_train_pred, y_test_prob = predict(X_train, y_train, X_test, y_test, rfc_third_iter)
+    compute_roc(y_test, y_test_prob, 0.1)
+    cnf_matrix = confusion_matrix(y_test, y_test_pred)
     plt.figure()
     disp = ConfusionMatrixDisplay(confusion_matrix=cnf_matrix)
     disp.plot()
@@ -518,4 +498,7 @@ def main():
 if __name__ == '__main__':
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
+    random.seed(42)
+    np.random.seed(42)
+    tf.random.set_seed(42)
     main()
